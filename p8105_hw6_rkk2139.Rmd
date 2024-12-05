@@ -1,0 +1,164 @@
+---
+title: "p8105_hw6_rkk2139"
+author: "Riya Kalra"
+date: "2024-11-28"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(broom)
+library(purrr)
+library(modelr)
+library(tidyr)
+library(crossval)
+
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+```{r}
+# Simulate the 2017 Central Park weather data structure
+set.seed(42)
+n_samples <- 365
+weather_df <- data.frame(
+  tmin = runif(n_samples, -10, 20),
+  tmax = runif(n_samples, 5, 35)
+)
+
+# Placeholder for bootstrap results
+r2_values <- c()
+log_beta_product_values <- c()
+
+# Number of bootstrap samples
+n_bootstrap <- 5000
+
+# Perform bootstrap sampling
+for (i in 1:n_bootstrap) {
+  # Bootstrap resample
+  sample <- weather_df %>% sample_frac(replace = TRUE)
+  
+  # Fit linear regression
+  fit <- lm(tmax ~ tmin, data = sample)
+  
+  # Calculate R^2
+  r2 <- glance(fit)$r.squared
+  r2_values <- c(r2_values, r2)
+  
+  # Extract coefficients
+  beta0 <- coef(fit)[1]
+  beta1 <- coef(fit)[2]
+  
+  # Compute log(beta0 * beta1), avoiding log of non-positive values
+  if (beta0 * beta1 > 0) {
+    log_beta_product <- log(beta0 * beta1)
+    log_beta_product_values <- c(log_beta_product_values, log_beta_product)
+  }
+}
+
+# Calculate 95% confidence intervals
+r2_ci <- quantile(r2_values, c(0.025, 0.975))
+log_beta_product_ci <- quantile(log_beta_product_values, c(0.025, 0.975))
+
+# Plot distributions
+r2_plot <- ggplot(data.frame(r2_values), aes(x = r2_values)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of R^2", x = "R^2", y = "Frequency") +
+  theme_minimal()
+
+log_beta_plot <- ggplot(data.frame(log_beta_product_values), aes(x = log_beta_product_values)) +
+  geom_histogram(bins = 30, fill = "green", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of log(β0 * β1)", x = "log(β0 * β1)", y = "Frequency") +
+  theme_minimal()
+
+print(paste("95% CI for R^2: [", r2_ci[1], ", ", r2_ci[2], "]", sep = ""))
+print(paste("95% CI for log(β0 * β1): [", log_beta_product_ci[1], ", ", log_beta_product_ci[2], "]", sep = ""))
+
+print(r2_plot)
+print(log_beta_plot)
+```
+### Problem 2
+```{r}
+# Read the data
+homicides <- read_csv("data/homicide-data.csv")
+
+# Clean and preprocess the data
+homicides <- homicides %>%
+  # Create the city_state variable
+  mutate(city_state = paste(city, state, sep = ", ")) %>%
+  # Remove specific cities
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")) %>%
+  # Filter for victim race (black or white only)
+  filter(victim_race %in% c("White", "Black")) %>%
+  # Ensure victim_age is numeric
+  mutate(victim_age = as.numeric(victim_age)) %>%
+  # Create the binary "solved" variable
+  mutate(resolved = if_else(disposition == "Closed by arrest", 1, 0))
+
+# Filter for Baltimore, MD for the first analysis
+baltimore <- homicides %>%
+  filter(city_state == "Baltimore, MD")
+
+# Fit logistic regression for Baltimore
+baltimore_glm <- glm(resolved ~ victim_age + victim_sex + victim_race, 
+                     family = binomial(link = "logit"), 
+                     data = baltimore)
+
+# Use broom::tidy to extract the results
+baltimore_results <- broom::tidy(baltimore_glm) %>%
+  filter(term == "victim_sexMale") %>%
+  mutate(OR = exp(estimate),
+         lower_CI = exp(estimate - 1.96 * std.error),
+         upper_CI = exp(estimate + 1.96 * std.error))
+
+# Display adjusted OR and CI for Baltimore
+print(baltimore_results)
+
+# Run glm for all cities
+results <- homicides %>%
+  group_by(city_state) %>%
+  nest() %>%
+  mutate(model = map(data, ~ glm(resolved ~ victim_age + victim_sex + victim_race, 
+                                 family = binomial(link = "logit"), 
+                                 data = .x)),
+         tidy_model = map(model, broom::tidy)) %>%
+  unnest(tidy_model) %>%
+  filter(term == "victim_sexMale") %>%
+  mutate(OR = exp(estimate),
+         lower_CI = exp(estimate - 1.96 * std.error),
+         upper_CI = exp(estimate + 1.96 * std.error)) %>%
+  select(city_state, OR, lower_CI, upper_CI)
+
+# Plot the results
+results |>
+  ungroup() |>
+  arrange(OR) |> 
+  mutate(city_state = factor(city_state, levels = city_state[order(OR)])) |>
+  ggplot(aes(x = city_state, y = OR, ymin = lower_CI, ymax = upper_CI)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), width = 0.5) +
+  labs(title = "Odds Ratio (Male vs Female Victims)",
+       x = "City",
+       y = "Adjusted Odds Ratios for Solved Homicides",
+       caption = "ORs with 95% Confidence Intervals") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+The plot illustrates that, across the 47 cities, most adjusted odds ratios (ORs) for solving homicides involving male versus female victims are below 1. This suggests male victims are generally less likely to have their cases solved compared to female victims. However, not all cities show statistically significant differences. Confidence intervals that include 1 indicate no clear evidence of a difference, meaning we cannot draw definitive conclusions for those cities.
+
+New York stands out with the lowest OR, implying the largest disparity in solved cases between male and female victims, with male victims being significantly less likely to have their homicides resolved. On the other hand, Albuquerque has the highest OR, but its confidence interval includes 1, so we cannot confirm a significant difference there.
+
+Interestingly, cities with ORs closer to 1, regardless of confidence interval size, suggest less disparity in solving cases for male and female victims. The wide range of ORs and their confidence intervals across cities also highlights substantial variability in how different jurisdictions handle homicide investigations based on the victim’s gender. This could reflect differences in resources, policies, or societal factors influencing case resolutions.
+
+Overall, while the data suggests a general trend of lower resolution rates for male victims, the variability and overlapping confidence intervals emphasize the need for caution when interpreting these results city by city.
