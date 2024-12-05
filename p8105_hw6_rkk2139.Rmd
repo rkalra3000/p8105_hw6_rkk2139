@@ -15,16 +15,17 @@ library(modelr)
 library(tidyr)
 library(crossval)
 
+
 weather_df = 
   rnoaa::meteo_pull_monitors(
     c("USW00094728"),
     var = c("PRCP", "TMIN", "TMAX"), 
     date_min = "2017-01-01",
-    date_max = "2017-12-31") %>%
+    date_max = "2017-12-31") |>
   mutate(
     name = recode(id, USW00094728 = "CentralPark_NY"),
     tmin = tmin / 10,
-    tmax = tmax / 10) %>%
+    tmax = tmax / 10) |>
   select(name, id, everything())
 ```
 
@@ -47,7 +48,7 @@ n_bootstrap <- 5000
 # Perform bootstrap sampling
 for (i in 1:n_bootstrap) {
   # Bootstrap resample
-  sample <- weather_df %>% sample_frac(replace = TRUE)
+  sample <- weather_df |> sample_frac(replace = TRUE)
   
   # Fit linear regression
   fit <- lm(tmax ~ tmin, data = sample)
@@ -88,26 +89,28 @@ print(paste("95% CI for log(β0 * β1): [", log_beta_product_ci[1], ", ", log_be
 print(r2_plot)
 print(log_beta_plot)
 ```
+
+
 ### Problem 2
 ```{r}
 # Read the data
 homicides <- read_csv("data/homicide-data.csv")
 
 # Clean and preprocess the data
-homicides <- homicides %>%
+homicides <- homicides |>
   # Create the city_state variable
-  mutate(city_state = paste(city, state, sep = ", ")) %>%
+  mutate(city_state = paste(city, state, sep = ", ")) |>
   # Remove specific cities
-  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")) %>%
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")) |>
   # Filter for victim race (black or white only)
-  filter(victim_race %in% c("White", "Black")) %>%
+  filter(victim_race %in% c("White", "Black")) |>
   # Ensure victim_age is numeric
-  mutate(victim_age = as.numeric(victim_age)) %>%
+  mutate(victim_age = as.numeric(victim_age)) |>
   # Create the binary "solved" variable
   mutate(resolved = if_else(disposition == "Closed by arrest", 1, 0))
 
 # Filter for Baltimore, MD for the first analysis
-baltimore <- homicides %>%
+baltimore <- homicides |>
   filter(city_state == "Baltimore, MD")
 
 # Fit logistic regression for Baltimore
@@ -116,8 +119,8 @@ baltimore_glm <- glm(resolved ~ victim_age + victim_sex + victim_race,
                      data = baltimore)
 
 # Use broom::tidy to extract the results
-baltimore_results <- broom::tidy(baltimore_glm) %>%
-  filter(term == "victim_sexMale") %>%
+baltimore_results <- broom::tidy(baltimore_glm) |>
+  filter(term == "victim_sexMale") |>
   mutate(OR = exp(estimate),
          lower_CI = exp(estimate - 1.96 * std.error),
          upper_CI = exp(estimate + 1.96 * std.error))
@@ -126,18 +129,18 @@ baltimore_results <- broom::tidy(baltimore_glm) %>%
 print(baltimore_results)
 
 # Run glm for all cities
-results <- homicides %>%
-  group_by(city_state) %>%
-  nest() %>%
+results <- homicides |>
+  group_by(city_state) |>
+  nest() |>
   mutate(model = map(data, ~ glm(resolved ~ victim_age + victim_sex + victim_race, 
                                  family = binomial(link = "logit"), 
                                  data = .x)),
-         tidy_model = map(model, broom::tidy)) %>%
-  unnest(tidy_model) %>%
-  filter(term == "victim_sexMale") %>%
+         tidy_model = map(model, broom::tidy)) |>
+  unnest(tidy_model) |>
+  filter(term == "victim_sexMale") |>
   mutate(OR = exp(estimate),
          lower_CI = exp(estimate - 1.96 * std.error),
-         upper_CI = exp(estimate + 1.96 * std.error)) %>%
+         upper_CI = exp(estimate + 1.96 * std.error)) |>
   select(city_state, OR, lower_CI, upper_CI)
 
 # Plot the results
@@ -155,6 +158,9 @@ results |>
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 ```
+
+
+
 The plot illustrates that, across the 47 cities, most adjusted odds ratios (ORs) for solving homicides involving male versus female victims are below 1. This suggests male victims are generally less likely to have their cases solved compared to female victims. However, not all cities show statistically significant differences. Confidence intervals that include 1 indicate no clear evidence of a difference, meaning we cannot draw definitive conclusions for those cities.
 
 New York stands out with the lowest OR, implying the largest disparity in solved cases between male and female victims, with male victims being significantly less likely to have their homicides resolved. On the other hand, Albuquerque has the highest OR, but its confidence interval includes 1, so we cannot confirm a significant difference there.
@@ -162,3 +168,129 @@ New York stands out with the lowest OR, implying the largest disparity in solved
 Interestingly, cities with ORs closer to 1, regardless of confidence interval size, suggest less disparity in solving cases for male and female victims. The wide range of ORs and their confidence intervals across cities also highlights substantial variability in how different jurisdictions handle homicide investigations based on the victim’s gender. This could reflect differences in resources, policies, or societal factors influencing case resolutions.
 
 Overall, while the data suggests a general trend of lower resolution rates for male victims, the variability and overlapping confidence intervals emphasize the need for caution when interpreting these results city by city.
+
+### Problem 3
+
+To create a basis for my own model, I researched other studies that looked at different factors influencing birth weight. This article from PubMed: <https://pubmed.ncbi.nlm.nih.gov/7570074/> suggests that low birth weight and low pre-pregnancy BMI can increase the risk of low birthweight and decrease chance of survival. However, factors such as gender can influence risk of mortality, with lighter, female babies, being more likely to survive despite their lower birth weight. It details that "maternal race, infant sex, plurality, altitude, education, and smoking" are factors that affect the entire birthweight distribution. Therefore I am choosing to use `babysex`: baby's sex, `mrace`: mother's race, `ppbmi`: mother’s pre-pregnancy BMI, and `smoken`: average number of cigarettes smoked per day during pregnancy.
+.
+
+```{r}
+# Read the dataset
+ 
+birth_data <- read_csv("https://p8105.com/data/birthweight.csv")
+
+# Data cleaning
+birth_data <- birth_data |>
+  janitor::clean_names() |> 
+  mutate(
+    babysex = 
+      case_match(babysex,
+          1 ~ "male",
+          2 ~ "female"),
+    babysex = as.factor(babysex),
+    malform = 
+      case_match(malform,
+          0 ~ "absent",
+          1 ~ "present"),
+    malform = as.factor(malform),
+    frace =
+      case_match(frace,
+          1 ~ "white",
+          2 ~ "black",
+          3 ~ "asian",
+          4 ~ "puerto rican",
+          8 ~ "other"),
+    frace = fct_infreq(frace),
+    mrace = 
+      case_match(mrace,
+          1 ~ "white",
+          2 ~ "black",
+          3 ~ "asian",
+          4 ~ "puerto rican",
+          8 ~ "other"),
+    mrace = fct_infreq(mrace))
+
+# Fit a proposed regression model
+model_hypothesis <- lm(
+  bwt ~ babysex + mrace + ppbmi + smoken,
+  data = birth_data
+)
+
+# Add residuals and predictions for diagnostic plotting
+birth_data <- birth_data |>
+  add_predictions(model_hypothesis) |>
+  add_residuals(model_hypothesis)
+
+# Plot residuals vs. fitted values
+birth_data |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Residuals vs Fitted Values for Hypothesized Model",
+    x = "Fitted Values",
+    y = "Residuals"
+  ) +
+  theme_minimal()
+
+# Compare model to other models
+
+# model 1: using length at birth using length at birth and gestational age as predictors (main effects only)
+model_length_gestage <- lm(bwt ~ blength + gaweeks, data = birth_data)
+model_length_gestage |> 
+  broom::tidy() |> 
+  knitr::kable() 
+
+
+# model 2: using head circumference, length, sex, and all interactions (including the three-way interaction)
+model_head_interaction <- lm(
+  bwt ~ bhead * blength * babysex,
+  data = birth_data
+)
+
+model_head_interaction |> 
+  broom::tidy() |> 
+  knitr::kable() 
+
+# Cross-validated prediction error
+cv_split = crossv_mc(birth_data, 100)
+
+# Function to calculate RMSE for a given model (data = x, refers to training dataset)
+cv_rmse =
+  cv_split |> 
+  mutate(
+    model_hypothesis = map(train, \(x) lm(bwt ~ babysex + mrace + ppbmi + smoken , data = x)),
+    model_length_gestage = map(train, \(x) lm(bwt ~ blength + gaweeks, data = x)),
+    model_head_interaction = map(train, \(x) lm(bwt ~ bhead + blength + babysex + bhead*blength + bhead*babysex + blength*babysex + bhead*blength*babysex, data = x))
+  ) |> 
+  mutate(
+    rmse_model_hypothesis = map2_dbl(model_hypothesis, test, rmse),
+    rmse_model_length_gestage = map2_dbl(model_length_gestage, test, rmse),
+    rmse_model_head_interaction = map2_dbl(model_head_interaction, test, rmse)
+  )
+
+# Compare distributions using violin and mean error
+cv_rmse |> 
+  summarize(
+    mean_error_hyp = mean(rmse_model_hypothesis),
+    mean_error_ln_gest = mean(rmse_model_length_gestage),
+    mean_error_head_inter = mean(rmse_model_head_interaction)
+  ) |> 
+  knitr::kable()
+
+cv_rmse |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) |> 
+  mutate(model = fct_reorder(model, rmse, .fun = median)) |>
+  ggplot(aes(x = model, y = rmse, fill = model)) + 
+  geom_violin() +
+  scale_fill_brewer(palette = "Set3") +
+  theme_minimal()
+```
+
+We can see that the mean error of my hypothesis model is the highest, and the error of the third model, which accounts for the three-way interactions, is the lowest. This is represented visually by the violin plot, where the hypothesized model is the highest and the third model is the lowest. This indicates that accounting for those interactions increased predictive accuracy, and that my model did not successfully account for these factors as well as that model.
